@@ -1,0 +1,1751 @@
+% Created 2016-09-03 Sat 11:44
+\documentclass[10pt, t]{beamer}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{fixltx2e}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{float}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{amsmath}
+\usepackage{textcomp}
+\usepackage{marvosym}
+\usepackage{wasysym}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\tolerance=1000
+\usepackage{APC524b}
+\hypersetup{colorlinks=true, urlcolor=webgreen}
+\let\texttt=\graytt
+\let\sout=\code
+\let\alert=\textbf
+\newcommand{\swig}{\texttt{swig}\xspace}  % swig
+\newcommand{\BP}{\texttt{boost::python}\xspace}  % boost::python
+\usetheme{default}
+\author{Alexey Svyatkovskiy, based on the original slides by Robert Lupton}
+\date{22 November 2016}
+\title{Calling C/\CPP from Python}
+\hypersetup{
+  pdfkeywords={},
+  pdfsubject={},
+  pdfcreator={Emacs 24.5.1 (Org mode 8.2.7c)}}
+\begin{document}
+
+\maketitle
+\def\wrap{\_wrap}
+
+\section*{Interfacing Python with compiled code}
+\label{sec-1}
+
+\begin{frame}[fragile,label=sec-1-1]{Motivation}
+ You'd like to be able to write your \CPP and then say things like:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+data = Image(filename)
+print data.getWidth()
+
+if data.get(0, 0) < 10:
+    debias(data)
+\end{lstlisting}
+
+\pause Some things are so much easier in python, and you can reload files while preserving all your data ---
+rather like using a debugger instead of \texttt{printf}; python makes a nice high-level interactive debugger for
+algorithms and data.
+
+\pause
+The authors of debuggers have realised this themselves, and you can now extend
+\texttt{gdb} and \texttt{lldb} in python --- but that's a different story.
+\end{frame}
+
+%\begin{frame}[fragile,label=sec-1-2]{Motivation: \texttt{SExtractor} lite}
+% Here's a partial emulation of a famous astronomical code:
+%
+%\pause - Read data: 
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%	exposure = @\color{red}ExposureF@(fileName)
+%\end{lstlisting}
+%\pause - Subtract background:
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%	im -= @\color{red}makeBackground@(im, bctrl).@\color{red}getImageF@()
+%\end{lstlisting}
+%\pause - Find detection threshold:
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%	stats = @\color{red}makeStatistics@(im, @\color{red}MEANCLIP@ | @\color{red}STDEVCLIP@)
+%	threshold = stats.@\color{red}getValue@(@\color{red}MEANCLIP@) + nsigma*stats.@\color{red}getValue@(@\color{red}STDEVCLIP@)
+%\end{lstlisting}
+%\pause - Smooth image with filter:
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%	@\color{red}convolve@(smoothedIm, im, kernel)
+%\end{lstlisting}
+%\pause - Detect sources:
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%	fs = @\color{red}makeFootprintSet@(smoothedIm, threshold, "", npixMin)
+%	fs = @\color{red}makeFootprintSet@(fs, grow, isotropic)
+%	fs.@\color{red}setMask@(exposure.@\color{red}getMaskedImage@().@\color{red}getMask@(), "DETECTED")
+%\end{lstlisting}
+%\pause - Measure sources:
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%	sources = fs.@\color{red}getFootprints@()
+%	measureSources = @\color{red}makeMeasureSources@(exposure)
+%	for i in range(len(objects)):
+%	    source = @\color{red}Source@()
+%  	    measureSources.@\color{red}apply@(source, objects[i])
+%\end{lstlisting}
+%\emph{N.b.} \CPP is in \begingroup\color{red}red\endgroup; the python is \begingroup\color{blue}blue\endgroup.
+%\end{frame}
+
+\begin{frame}[fragile,label=sec-1-3]{Tools to bind C/\CPP/Fortran to python}
+ There is a large variety of solutions available to the problem of binding C/\CPP to python; the 
+common ones are:
+\begin{itemize}
+\item \texttt{cython}
+\item \texttt{ctypes} module and attribute
+\item \BP
+\item \swig
+\item hand-crafted code using the python C API, \emph{CPython}
+\end{itemize}
+
+\pause
+There's also \texttt{PyPy} (\url{http://pypy.org}) which replaces the traditional \texttt{C} implementation of \texttt{python} with
+a \textit{J}ust \textit{I}n \textit{T}ime compiler (\emph{JIT}) that provides significant speedups.
+\pause
+\end{frame}
+
+\section*{cython}
+\label{sec-2}
+\begin{frame}[fragile,label=sec-2-1]{\texttt{cython}}
+ \texttt{cython} lets you write python and speed up some critical part of the code.
+\pause 
+\texttt{cython} can also be used to bind C/\CPP to python --- a topic I'll return to later.
+
+\pause
+For example, I have a file \alert{hello.pyx}:
+\snippetFile[python]{src/hello.pyx}
+
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+def speak(name):
+    print("Hello %s" % name)
+Hello Alexey
+\end{lstlisting}
+\pause
+\lstset{language=text,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import pyximport
+>>> pyximport.install()
+>>> import hello
+>>> hello.speak("Alexey")
+Hello Alexey
+\end{lstlisting}
+\pause
+Trivia: it's "pyx" is because \texttt{cython} is a fork of an old project called \texttt{pyrex}.
+
+\pause
+\lstset{language=text,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+$ wc -l ~/.pyxbld/temp.linux-x86_64-2.7/pyrex/hello.c 
+1792 /home/alexeys/.pyxbld/temp.linux-x86_64-2.7/pyrex/hello.c
+\end{lstlisting}
+
+That innocent 2-line \texttt{cython} script generated 1792 lines of C.
+
+\begin{block}{\texttt{cython} website}
+\url{http://cython.org}
+\end{block}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-2-2]{Building \texttt{cython} extensions}
+ We just saw \texttt{pyximport} as a simple way to build cython extensions.  
+\pause
+An alternative is to use python's \texttt{distutils}; this requires a \alert{setup.py} file along these lines:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+from distutils.core import setup
+from distutils.extension import Extension
+from Cython.Distutils import build_ext
+
+setup(
+    cmdclass = {'build_ext': build_ext},
+    ext_modules = [Extension("hello", ["hello.pyx"])]
+)
+\end{lstlisting}
+\pause
+which can be invoked as
+\lstset{language=text,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+$ python setup.py build_ext --inplace
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-2-3]{\texttt{cython} timings}
+ Stealing an example from the \texttt{cython} documentation
+(\url{http://docs.cython.org/src/quickstart/cythonize.html}),
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+def f(x):
+    return x**2-x
+
+def integrate_f(a, b, N):
+    s = 0
+    dx = (b-a)/N
+    for i in range(N):
+        s += f(a+i*dx)
+    return s * dx
+\end{lstlisting}
+
+\pause
+We can time this with:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import timeit; import hello
+>>> t = timeit.Timer("import hello; hello.integrate_f(0, 10.0, 10**7)")
+>>> print "%.2fs" % t.timeit(1)
+5.46s
+\end{lstlisting}
+
+\pause
+If I use \texttt{pyximport} to import (\emph{i.e.} convert to C, compile, and dynamically load) that file,
+ the same test takes 3.85s
+\end{frame}
+
+\begin{frame}[fragile,label=sec-2-4]{Using \texttt{cython}'s \texttt{cdef} on variables}
+ The first thing to do is to declare some variable's types with \texttt{cdef}:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+def f1(double x):
+    return x**2-x
+
+def integrate_f1(double a, double b, int N):
+    cdef int i
+    cdef double s, dx
+    s = 0
+    dx = (b-a)/N
+    for i in range(N):
+        s += f1(a+i*dx)
+    return s * dx
+\end{lstlisting}
+\pause This runs in 1.07s
+
+\begin{itemize}
+\item Since the iterator variable \texttt{i} is typed with C semantics, the for-loop will be compiled to pure C code.
+\item Typing \texttt{a}, \texttt{s} and \texttt{dx} is important as they are involved in arithmetic within the for-loop
+\item Typing \texttt{b} and \texttt{N} makes less of a difference
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-2-5]{Using \texttt{cython}'s \texttt{cdef} on functions}
+ Next we can change \texttt{f} to use the C calling sequence, \emph{i.e.} passing C variables (in registers?) rather than
+converting to and from python objects:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+def f2(double x) except? -2:
+    return x**2-x
+
+def integrate_f2(double a, double b, int N):
+    cdef int i
+    cdef double s, dx
+    s = 0
+    dx = (b-a)/N
+    for i in range(N):
+        s += f2(a+i*dx)
+    return s * dx
+\end{lstlisting}
+\pause This runs in 0.05s
+
+\pause
+\emph{N.b.} This version of \texttt{f} is of course only callable from \texttt{cython} code, not vanilla \texttt{python}.
+
+\pause
+The \sout{except? -2} bit says "If you return -2 check if an error occurred, and maybe throw an exception".
+\end{frame}
+
+\begin{frame}[fragile,label=sec-2-6]{Summary of timings}
+ \begin{itemize}
+\item python
+\end{itemize}
+\begin{center}
+\begin{tabular}{ll}
+\texttt{f} & 5.46s\\
+\end{tabular}
+\end{center}
+\begin{itemize}
+\item cython
+\end{itemize}
+\begin{center}
+\begin{tabular}{ll}
+\texttt{f} & 3.85s\\
+\texttt{f1} & 1.07s\\
+\texttt{f2} & 0.05s\\
+\end{tabular}
+\end{center}
+
+
+Clearly using \texttt{cython} can provide dramatic speedups for critical sections of code.
+\end{frame}
+
+\section*{ctypes}
+\label{sec-3}
+\begin{frame}[fragile,label=sec-3-1]{\texttt{ctypes}}
+
+if your use case is calling C library functions or system calls, you should consider using the \texttt{ctypes} module
+rather than writing custom C code. Not only does \texttt{ctypes} let you write Python code to interface with C code,
+but it is more portable between implementations of Python than writing and compiling an extension module
+
+\pause
+\texttt{ctypes} is a builtin part of python (as of python 2.5)
+\url{http://docs.python.org/library/ctypes.html\#module-ctypes}
+
+\pause
+\texttt{ctypes} provides a way to access functions (and other symbols) in sharable object libraries.
+\pause
+Despite this official status, my reading is that \texttt{cython} is slowly taking over from \texttt{ctypes} 
+for wrapping scientific code.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-3-2]{Using \texttt{ctypes} to access C standard library}
+ \snippetFile[python]{src/ctypes_demo.py}
+
+Loading a sharable library (in this case \texttt{libc}) is easy:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+import ctypes
+libc = ctypes.CDLL("libc.dylib")
+\end{lstlisting}
+
+\pause
+In general you may not know the file to load, so you can use something like
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+import ctypes.util
+libc = ctypes.util.find_library("c")
+libc = ctypes.CDLL(libc)
+\end{lstlisting}
+
+\pause
+It's easy to use too:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+libc.system("echo hello world")
+\end{lstlisting}
+\end{frame}
+
+%\begin{frame}[fragile,label=sec-3-3]{\texttt{ctypes}' limitations}
+% The \texttt{ctypes} is interface is \alert{very} low level.  For example,
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%strchr = libc.strchr
+%print strchr("abcdef",ord("d"))
+%\end{lstlisting}
+%prints \texttt{8059980} (the address of the string \texttt{"def"})
+
+%\pause
+%The problem is that \texttt{ctypes} doesn't know \texttt{strchr}'s return type, but we can tell it:
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%strchr.restype = ctypes.c_char_p
+%print strchr("abcdef",ord("d"))
+%\end{lstlisting}
+%prints \texttt{'def'}.
+
+%\pause
+%Why should I have to type \texttt{ord("d")}, which converts \texttt{d} to an \texttt{char}?
+%\pause I don't:
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%strchr.argtypes = [ctypes.c_char_p,ctypes.c_char]
+%print strchr("abcdef","d")
+%\end{lstlisting}
+%prints \texttt{'def'} and 
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%try:
+%    strchr("abcdef","def")
+%except Exception e:
+%    print e
+%\end{lstlisting}
+%raises a \texttt{ctypes.ArgumentError} exception
+%\end{frame}
+
+%\begin{frame}[fragile,label=sec-3-4]{\texttt{ctypes}' limitations}
+% Without \texttt{argtypes},
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%print libc.strlen(1)
+%\end{lstlisting}
+%crashes python. 
+%\pause
+%Fortunately,
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%libc.system.argtypes = [ctypes.c_char_p]
+%try:
+%    print libc.strlen(1)
+%except Exception e:
+%    print e
+%\end{lstlisting}
+%raises the expected \texttt{ctypes.ArgumentError} exception.
+%\pause
+%Unfortunately,
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%print libc.strlen("abc","def")
+%\end{lstlisting}
+%quietly returns \texttt{3}
+%\end{frame}
+
+
+
+\begin{frame}[fragile,label=sec-3-5]{Defining custom types with \texttt{ctypes}}
+The ctypes module of the Python standard library provides definitions of fundamental data types that can be passed to C programs. For example a C double type:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+import ctypes as C
+x = C.c_double(2.71828)
+\end{lstlisting}
+\pause
+And here is the pointer type to double:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+xp = C.POINTER(C.c_double)(); 
+xp.contents = x
+\end{lstlisting}
+
+\pause
+Which gives:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> print(xp)
+>>> <__main__.LP_c_double object at 0x7fb63427c9e0>
+>>> print(x)
+>>> c_double(2.71828)
+\end{lstlisting}
+
+\pause
+Array types can be created by multiplying a ctype by a positive integer, e.g.:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+ylist = [1.,2.3,4.,5.]
+n = len(ylist)
+y = (C.c_double*n)()
+y[:] = ylist
+#or simply
+y = (C.c_double*n)(*ylist)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-3-6]{\texttt{ctypes}: a complete example I}
+Let us start by writing some C code. The dot product of two vectors for instance:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+double dot_product(double v[], double u[], int n)
+{
+    double result = 0.0;
+    for (int i = 0; i < n; i++)
+        result += v[i]*u[i];
+    return result;
+}
+\end{lstlisting}
+\pause
+Next we compile it, and build a shared object:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+gcc -c -Wall -Werror -fpic my_dot.c 
+gcc -shared -o my_dot.so my_dot.o
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-3-7]{\texttt{ctypes}: a complete example II}
+We have already seen that the \texttt{ctypes} module has a utility subpackage to assist in locating a dynamically-loaded library:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+import ctypes.util
+C.util.find_library('my_dot')
+myDL = C.CDLL('./my_dot.so')
+\end{lstlisting}
+\pause
+Here is a full example:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+from ctypes import CDLL, c_int, c_double
+mydot = CDLL('./my_dot.so').dot_product
+def dot(vec1, vec2): # vec1, vec2 are Python lists
+    n = len(vec1)
+    mydot.restype = c_double
+    return mydot((c_double*n)(*vec1), (c_double*n)(*vec2), c_int(n))
+
+vec1 = [x for x in range(1000000)]
+vec2 = [x for x in range(1000000)]
+\end{lstlisting}
+\pause
+Warning: if you use the extension .so for the name of a file, do not make its stem the same as a .py file in the same directory, e.g., do not have both a funcs.py and a funcs.so.
+\end{frame}
+
+
+%\begin{frame}[fragile,label=sec-5-5]{Returning a \texttt{struct}}
+% Returning to an earlier example, we had
+%\lstset{language=C,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%struct {
+%    char *first;	 /* first name */
+%    char *last; 	 /* last name */
+%    int number;
+%} Noddy;
+%\end{lstlisting}
+
+%\pause
+%To return one of these via \texttt{ctypes} I need to define (on the python side)
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%  import ctypes
+%  
+%  class Noddy(ctypes.Structure):
+%      _fields_ = [
+%          ('first', ctypes.c_char_p),
+%          ('last', ctypes.c_char_p),
+%          ('number', ctypes.c_int),
+%          ]
+%      
+%  function.restype = ctypes.POINTER(Noddy)
+%\end{lstlisting}
+
+%\pause
+%I obviously need to keep this is sync with the \CPP version.  
+
+%\pause
+%I don't know how to return a \texttt{class} with virtual functions (and thus a \texttt{vtbl}); the
+%\texttt{c} in \texttt{ctypes} really does seem to stand for C, not \CPP.
+%\end{frame}
+
+\begin{frame}[fragile,label=sec-3-8]{\texttt{ctypes} and numpy}
+ Here's an example taken from \href{http://www.scipy.org/Cookbook/Ctypes}{the ctypes manual}
+
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+  import numpy
+  import ctypes
+  
+  # Extract desired information from libfoo.so [or libfoo.dylib]
+  _foo = numpy.ctypeslib.load_library('libfoo', '/my/working/directory')
+  _foo.bar.restype = ctypes.c_int
+  _foo.bar.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int]
+  
+  def bar(x):
+      """Wrapper to call C function 'bar' nicely from python"""
+      return _foo.bar(x.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(x))
+  
+  x = numpy.random.randn(10)
+  n = bar(x)
+\end{lstlisting}
+
+Note that \texttt{numpy} arrays provide \texttt{.ctypes} to extract the information that \texttt{ctypes} needs; there's also \emph{e.g.}
+\texttt{x.ctypes.shape[:3]}
+\end{frame}
+
+\section*{cython and C/\CPP}
+\label{sec-4}
+\begin{frame}[fragile,label=sec-4-1]{\texttt{cython} and C/\CPP}
+ \texttt{cython} can also be used to bind C/CPP to python.
+
+\pause
+For example, 
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+// Return the greatest common divisor of a and b
+int gcd(int a, int b);
+\end{lstlisting}
+(the details are left to your imagination).  
+\pause
+To use this from python using \texttt{cython}, we need an interface file \texttt{simple.pyx}:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+cdef extern from "gcd.h":
+    int c_gcd "gcd" (int a, int b)
+
+def gcd(int a, int b):
+    return c_gcd(a, b)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-4-2]{\texttt{cython} and C/\CPP}
+ We next need to build the glue layer; the Makefile looks like:
+\lstset{language=sh,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+simple.so: simple.pyx gcd.c gcd.h
+        python setup.py build_ext --inplace
+\end{lstlisting}
+\pause
+with
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+from distutils.core import setup
+from distutils.extension import Extension
+from Cython.Distutils import build_ext
+
+source_files = ["simple.pyx", "gcd.c"]
+
+ext_modules = [Extension(
+    name="simple",
+    sources=source_files,
+    # extra_objects=["fc.o"],  # if you compile fc.cpp separately
+    extra_compile_args = "-std=c99".split(),
+    # extra_link_args = "...".split()
+    )]
+
+setup(
+    cmdclass = {'build_ext': build_ext},
+    ext_modules = ext_modules
+)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-4-3]{\texttt{cython} and C/\CPP}
+ We can then triumphantly type
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+import simple
+
+x = 52
+y = 65
+z = simple.gcd(x,y)
+print "The gcd of %d and %d is %d" % (x,y,z)
+\end{lstlisting}
+\pause
+and discover that
+\lstset{language=sh,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+The gcd of 52 and 65 is 13
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-4-4]{\texttt{cython} and \texttt{numpy}}
+ \lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+# -*- python -*-
+#
+# Import the bits we need from C
+#
+cdef extern from "vector_ops.h":
+    void c_scalar_multiply "scalar_multiply" (double alpha,
+                                              double *x, double *z, long n)
+    void c_vector_add "vector_add" (double *x, double *y, double *z, long n)
+#
+# Define wrapper functions to be used from python
+#
+import numpy as np
+cimport numpy as np
+
+def scalar_multiply(double alpha, np.ndarray[np.double_t,ndim=1] x):
+    cdef long n = x.shape[0]
+    cdef np.ndarray z = np.empty(n, dtype=np.double)
+    c_scalar_multiply(alpha, <double *> x.data, <double *> z.data, n)
+    return z
+
+def vector_add(np.ndarray[np.double_t,ndim=1] x,
+               np.ndarray[np.double_t,ndim=1] y):
+    cdef long n = x.shape[0]
+    cdef np.ndarray z = np.empty(n, dtype=np.double)
+    c_vector_add(<double *> x.data, <double *> y.data, <double *> z.data, n)
+    return z
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-4-5]{\texttt{cython} and \texttt{numpy}}
+ Building is very similar to the previous example; here's the diff for \file{setup.py}:
+\lstset{language=sh,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+$ diff numpy/setup.py simple/setup.py 
+1d0
+< import numpy
+6c5
+< source_files = ["vec_ops.pyx", "vector_ops.c"]
+---
+> source_files = ["simple.pyx", "gcd.c"]
+9c8
+<     name="vec_ops",
+---
+>     name="simple",
+12d10
+<     include_dirs = [numpy.get_include()],
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-4-6]{\texttt{cython} and \texttt{numpy}}
+ Using our new extension is as easy as:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+import vec_ops, numpy as np
+
+alpha, x = 2.1, np.array([1.,2.,3.])
+y = vec_ops.scalar_multiply(alpha, x)
+print alpha, "times", x, "is", y
+
+z = vec_ops.vector_add(x, y)
+print x, "plus", y, "is", z
+\end{lstlisting}
+\pause
+which prints
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+2.1 times [ 1.  2.  3.] is [ 2.1  4.2  6.3]
+[ 1.  2.  3.] plus [ 2.1  4.2  6.3] is [ 3.1  6.2  9.3]
+\end{lstlisting}
+\end{frame}
+\begin{frame}[fragile,label=sec-4-7]{Digression: compiler warnings}
+ there are some compiler warnings from the machine-generated code; \emph{e.g.}
+\lstset{language=sh,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+vec_ops.c: In function '__pyx_pf_7vec_ops_2vector_add':
+vec_ops.c:1363: warning: implicit conversion shortens 64-bit value into a 32-bit value
+vec_ops.c: In function '__Pyx_GetBuffer':
+vec_ops.c:4649: warning: unused variable 'getbuffer_cobj'
+\end{lstlisting}
+\pause
+Some of these are avoidable: in \file{vector\_ops.h} we see:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+void scalar_multiply(double alpha, const double *x, double *z, int n);
+\end{lstlisting}
+\pause
+(should be \code{long})
+\end{frame}
+
+\begin{frame}[fragile,label=sec-4-8]{Digression: compiler warnings}
+ Some can't be avoided without delving into \texttt{cython} internals:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+static int __Pyx_GetBuffer(PyObject *obj, Py_buffer *view, int flags) 
+{
+    PyObject *getbuffer_cobj;
+  
+    if (PyObject_TypeCheck(obj, __pyx_ptype_5numpy_ndarray)) 
+       return __pyx_pw_5numpy_7ndarray_1__getbuffer__(obj, view, flags);
+
+#if PY_VERSION_HEX < 0x02060000
+    if (obj->ob_type->tp_dict &&
+        (getbuffer_cobj = PyMapping_GetItemString(obj->ob_type->tp_dict,
+                                                  "__pyx_getbuffer"))) {
+...
+\end{lstlisting}
+\pause
+That would have been better written as:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+static int __Pyx_GetBuffer(PyObject *obj, Py_buffer *view, int flags) 
+{
+    if (PyObject_TypeCheck(obj, __pyx_ptype_5numpy_ndarray)) 
+       return __pyx_pw_5numpy_7ndarray_1__getbuffer__(obj, view, flags);
+
+#if PY_VERSION_HEX < 0x02060000
+    PyObject *getbuffer_cobj;
+    if (obj->ob_type->tp_dict &&
+        (getbuffer_cobj = PyMapping_GetItemString(obj->ob_type->tp_dict,
+                                                  "__pyx_getbuffer"))) {
+...
+\end{lstlisting}
+\end{frame}
+
+\section*{\BP}
+\label{sec-5}
+\begin{frame}[label=sec-5-1]{\BP}
+\begin{block}{\BP}
+\url{http://www.boost.org/doc/libs/1_57_0/libs/python/doc/index.html}
+
+\url{http://www.boost.org/doc/libs/1_57_0/libs/python/doc/tutorial/doc/html/index.html}
+
+\pause
+There is also
+\url{http://wiki.python.org/moin/boost.python}
+\end{block}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-5-2]{\texttt{greet} in \BP}
+ \snippetFile[C++]{src/speak.cc}
+
+(This is based on
+\url{http://www.boost.org/doc/libs/1_57_0/libs/python/doc/tutorial/doc/html/index.html})
+
+Let's return to an old friend, \texttt{greet}.
+\pause
+We first need \texttt{greet} itself:
+
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+std::string greet(const std::string &str="world") {
+   return "hello " + str;
+}
+\end{lstlisting}
+
+(we could \texttt{\#include "greet.h"} instead).
+\pause
+To bind this using \BP, we need to include the proper header:
+
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+#include "boost/python.hpp"
+\end{lstlisting}
+
+\pause
+and then
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+BOOST_PYTHON_MODULE(speak)
+{
+  using namespace boost::python;
+  def("greet", greet);
+}
+\end{lstlisting}
+\pause
+After building our extension \texttt{speak}, we can say
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import speak
+>>> print speak.greet("class")
+hello class
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-5-3]{Building with \BP}
+ Building \BP extensions is easy, \emph{e.g.} on Della cluster:
+\lstset{language=textc,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+$ module load boost/1.55.0 
+$ g++ -o speak.os -c -fPIC -g -Wall \
+        -I/usr/include/boost -I/usr/include/python2.7 speak.cc
+$ g++ -o speak.so -shared speak.os -lpython2.7 -lboost_python
+\end{lstlisting}
+\pause
+If you need to install \texttt{boost} on your own machine look at the \emph{getting started} section of 
+\url{http://www.boost.org} or go a-googling.
+
+\pause
+\emph{N.b.} the \texttt{boost} documentation recommends building \alert{speak.cc} with \texttt{bjam};  ignore this
+advice.  With modernish versions of \texttt{boost} there's no need to lie on that bed of nails.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-5-4]{Overloaded functions}
+ In
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+std::string greet(const std::string &str="world") {
+   return "hello " + str;
+}
+\end{lstlisting}
+we provided a default value for \texttt{str}, so this should work:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import speak
+>>> print speak.greet()
+\end{lstlisting}
+\pause
+but in reality:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> print speak.greet()
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+Boost.Python.ArgumentError: Python argument types in
+    speak.greet()
+did not match C++ signature:
+    greet(std::string)
+\end{lstlisting}
+(but at least that's a good error message)
+\end{frame}
+
+\begin{frame}[fragile,label=sec-5-5]{Overloaded functions}
+ \BP can handle this, but it takes a bit more work:
+
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+BOOST_PYTHON_FUNCTION_OVERLOADS(greet_s_overloads, greet, 0, 1)
+BOOST_PYTHON_MODULE(speak)
+{
+  using namespace boost::python;
+  def("greet", greet, greet_s_overloads());
+}
+\end{lstlisting}
+
+\pause
+The \texttt{BOOST\_PYTHON\_FUNCTION\_OVERLOADS} says that \texttt{greet} takes from \texttt{0} to \texttt{1} arguments, and
+\BP does the rest, generating the function \texttt{greet\_s\_overloads}.
+\end{frame}
+
+\begin{frame}[label=sec-5-6]{Overloaded functions}
+If we also add
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+std::string greet(int i) {
+   std::ostringstream ss;
+   ss << "Hello " << i;
+   return ss.str();
+}
+\end{lstlisting}
+and
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+std::string greet(const std::string &str, int nrepeat) {
+   std::ostringstream ss;
+   ss << "Hello";
+   for (int i = 0; i != nrepeat; ++i) ss << " " << str;
+   return ss.str();
+}
+\end{lstlisting}
+\pause
+We need to tell \BP:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+std::string (*greet_i)(int) = &greet;
+std::string (*greet_s)(const std::string &, int i) = &greet;
+
+BOOST_PYTHON_FUNCTION_OVERLOADS(greet_s_overloads, greet, 0, 2)
+BOOST_PYTHON_MODULE(speak)
+{
+   using namespace boost::python;
+   def("greet", greet_i);
+   def("greet", greet_s, greet_s_overloads());
+}
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-5-7]{\texttt{classes}}
+ Consider
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+class X {
+public:
+   void set(const std::string& msg) { msg_ = msg; }
+   std::string greet() { return "hello " + msg_; }
+private:
+   std::string msg_;
+};
+\end{lstlisting}
+
+\pause
+The \BP incantation is:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+BOOST_PYTHON_MODULE(speak)
+{
+   using namespace boost::python;
+   class_<X>("X")
+      .def("greet", &X::greet)
+      .def("set", &X::set);
+}
+\end{lstlisting}
+
+\pause
+after which:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import speak
+>>> X = speak.X()
+>>> x.set("Alexey")
+>>> print x.greet()
+hello Alexey
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-5-8]{Data members in \texttt{classes}}
+ Consider
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+struct Y {
+   int i;
+};
+\end{lstlisting}
+
+\pause
+We need to say what sort of access we need to \texttt{i}, \emph{e.g.}
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+BOOST_PYTHON_MODULE(speak)
+{
+   using namespace boost::python;
+   class_<Y>("Y")
+    .def_readwrite("i", &Y::i);
+}
+\end{lstlisting}
+
+\pause
+and:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import speak
+>>> y = speak.Y()
+>>> y.i
+0
+>>> y.i = 10
+>>> y.i
+10
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-5-9]{\BP and the \emph{STL}}
+STL is well support in \BP as well:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+#include "boost/python.hpp"
+#include "boost/python/suite/indexing/vector_indexing_suite.hpp"
+BOOST_PYTHON_MODULE(speak)
+{
+   using namespace boost::python;
+   class_<std::vector<double> >("vectorDouble")
+   .def(vector_indexing_suite<std::vector<double> >());
+}
+\end{lstlisting}
+
+\pause
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import speak
+>>> v = speak.vectorDouble()
+>>>  v.append(10); v.append(100)
+>>> print len(v), [x for x in v]
+2 [10.0, 100.0]
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-5-10]{Functions that take \texttt{std::vector<double>}}
+ If we define
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+#include <iostream>
+#include <iterator>
+...
+template<typename T>
+void print_vector(const std::vector<T>& v) {
+   std::copy(v.begin(), v.end(),
+   std::ostream_iterator<T>(std::cout, " "));
+   std::cout << std::endl;
+}
+\end{lstlisting}
+
+\pause
+and add
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+def("print_vector", print_vector<double>);
+\end{lstlisting}
+
+\pause
+we can say:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> speak.print_vector(v)
+10 100
+\end{lstlisting}
+\end{frame}
+
+\section*{\protect\swig}
+\label{sec-6}
+\begin{frame}[label=sec-6-1]{What is \swig?}
+The \textit{S}implified \textit{W}rapper and \textit{I}nterface \textit{G}enerator,
+(\swig;
+\url{http://www.swig.org}
+) is a way of \alert{automatically} generating code that interfaces C or \CPP to \{
+C\#,
+Guile,
+Java,
+Lua,
+Modula 3,
+Mzscheme,
+Ocaml,
+Octave,
+Perl,
+PHP4,
+PHP5,
+Pike,
+Python,
+R (aka GNU S),
+Ruby,
+Lisp S-Expressions,
+Tcl,
+Common Lisp / UFFI,
+XML
+\}
+that handles all of these concerns, and more.
+
+\begin{block}{The \swig online documentation}
+\url{http://www.swig.org/Doc3.0/index.html}
+
+The latest version as of 2016-06-12 is 3.0.10
+\end{block}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-2]{\emph{Hello World}}
+ Consider a couple of source files, \alert{hello.h}:
+\lstset{language=c++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+#if !defined(HELLO_H)
+#define HELLO_H 1
+
+#include <string>
+
+void speak(std::string const& str);
+#endif
+\end{lstlisting}
+and \alert{hello.c}:
+\lstset{language=c++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+#include <iostream>
+#include "hello.h"
+
+void speak(std::string const& str)
+{
+    std::cout << "Alexey says: " << str << std::endl;
+}
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-3]{\emph{Hello World}}
+ With this \swig interface file, \alert{hello.i}:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+%module hello
+
+%{
+#include "hello.h"
+%}
+
+%include "hello.h"
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-4]{\emph{Hello World}}
+ and after running make:
+\lstset{language=textc,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+$ swig -o hello_wrap.cc -c++ -python hello.i
+$ g++ -o hello.os -c -fPIC -I/usr/include/python2.7 hello.cc
+$ g++ -o hello_wrap.os -c -fPIC -I/usr/include/python2.7 hello_wrap.cc
+$ g++ -o _hello.so -bundle -flat_namespace hello_wrap.os hello.os \
+        -L/Library/Python/2.7/site-packages -lpython
+\end{lstlisting}
+
+\gdef\hello{\_hello}
+\pause
+\emph{i.e.}
+\begin{itemize}
+\item Run \swig to generate \alert{hello\wrap.cc} (and also, as we shall see, \alert{hello.py})
+\item Compile \alert{hello.cc} and \alert{hello\wrap.cc} to create object files \textbf{*.os}
+    with the usual compile-python boilerplate.
+\item Build a loadable module \alert{\hello.so} using the usual os/x dylib boilerplate.
+\end{itemize}
+
+\pause
+I can start python and import my new module
+\pause
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import hello
+>>> hello.speak("hello world")
+Alexey says: hello world
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[label=sec-6-5]{How does \swig earn its keep?}
+What did \swig actually do?  It wrote two files, \alert{hello\wrap.cc} (which we just compiled)
+and \alert{hello.py}.  When we started python there were two possible files we could import:
+\alert{\hello.so} and \alert{hello.py}. The former is created from \alert{hello\wrap.cc} --- a
+file that you really don't want to examine.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-6]{\alert{\wrap.cc} files}
+ You may not want to, but\ldots{}
+\pause
+A small and simplified part of \alert{hello\wrap.cc}'s 4k lines reads:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+SWIGINTERN PyObject *_wrap_speak(PyObject *SWIGUNUSEDPARM(self),
+                                 PyObject *args) {
+  std::string *arg1 = 0 ;
+  int res1 = SWIG_OLDOBJ ;
+  PyObject * obj0 = 0 ;
+  
+  if (!PyArg_ParseTuple(args,(char *)"O:speak",&obj0)) SWIG_fail;
+
+  std::string *ptr = (std::string *)0;
+  res1 = SWIG_AsPtr_std_string(obj0, &ptr);
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method 'speak' "
+                        "argument 1 of type 'std::string const &'"); 
+  }
+  arg1 = ptr;
+
+  @\color{red}speak((std::string const \&)*arg1);@
+
+  if (SWIG_IsNewObj(res1)) delete arg1;
+  return SWIG_Py_Void();
+fail:
+  if (SWIG_IsNewObj(res1)) delete arg1;
+  return NULL;
+}
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-7]{Explanations}
+ What's going on?  This is within an \texttt{extern "C"} block, so it defines a callable function
+\texttt{\_wrap\_speak()} that checks the argument type and calls \texttt{speak()}.
+
+\pause
+Let's read some more of \alert{hello\wrap.cc}:
+\lstset{language=c++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+static PyMethodDef SwigMethods[] = {
+	 { (char *)"SWIG_PyInstanceMethod_New",
+          (PyCFunction)SWIG_PyInstanceMethod_New, METH_O, NULL},
+	 @\color{red}{ (char *)"speak", \_wrap\_speak, METH\_VARARGS, NULL}@,
+	 { NULL, NULL, 0, NULL }
+};
+...
+void
+SWIG_init(void) {
+  PyObject *m, *d;
+
+  m = Py_InitModule((char *) SWIG_name, SwigMethods);
+  d = PyModule_GetDict(m);
+  
+  SWIG_InitializeModule(0);
+  SWIG_InstallConstants(d,swig_const_table);
+}
+\end{lstlisting}
+
+\emph{I.e.} we define a module \texttt{\_hello} that knows the command \texttt{speak}.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-8]{Syntactic sugar}
+ However, in python we said \texttt{hello.speak("hello world")}, not
+\texttt{\_hello.speak("hello world")}.
+
+\pause
+
+Enter \alert{hello.py}.  In this case it's more-or-less trivial:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+import _hello
+...
+speak = _hello.speak
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-9]{\swig's \texttt{\%inline} directive}
+ I could have avoided the extra files with:
+\lstset{language=c++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+// -*- c++ -*-
+%module hello_inline
+%include "std_string.i"
+
+%{
+#include <iostream>
+%}
+
+%inline %{
+void speak(std::string const& str)
+{
+    std::cout << "Alexey says: " << str << std::endl;
+}
+%}
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-10]{C and \swig}
+ OK; so that was \CPP but I could have just as well have used C and \texttt{printf}.
+A prime motivation for pairing \CPP and python is that both are OO languages.
+
+\pause
+For example, using C I have to tell \swig things like:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+%newobject create_foo;
+%delobject destroy_foo;
+
+Foo *create_foo();
+void destroy_foo(Foo *foo);
+\end{lstlisting}
+to handle creation/deletion of objects.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-11]{\CPP and \swig}
+ \lstset{language=c++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+  %module classes
+  %include "std_string.i"
+  
+  %{
+  #include <iostream>
+  #include <string>
+  %}
+  
+  %inline %{
+  class Foo {
+  public:
+      Foo() { std::cout << "Hail, fair morning" << std::endl; }
+      ~Foo() {
+         std::cout << "It is a far, far better thing that I do now..."
+                   << std::endl;
+      }
+  };
+  %}
+\end{lstlisting}
+
+\pause
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import classes
+>>> x = classes.Foo()
+Hail, fair morning
+>>> del x
+It is a far, far better thing that I do now...
+>>> def tmp(): x = classes.Foo()
+>>> tmp()
+Hail, fair morning
+It is a far, far better thing that I do now...
+>>>
+\end{lstlisting}
+
+\pause (note that the destructor fired when \texttt{x} went out of scope)
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-12]{Proxy classes}
+ \def\classes{\_classes}
+In this case the \swig-generated \alert{classes.py} is more complicated.  It defines a python ``proxy'' class
+\texttt{Foo}. For example, \texttt{\_\_init\_\_} calls \texttt{new\_Foo} in \alert{\classes.so}'s defined python
+interface; which calls \texttt{\_wrap\_new\_Foo}; which calls the constructor \texttt{Foo()}:
+
+\pause
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+class Foo(_object):
+    __swig_setmethods__ = {}
+    __setattr__ = \
+       lambda self, name, value: _swig_setattr(self, Foo, name, value)
+    __swig_getmethods__ = {}
+    __getattr__ = lambda self, name: _swig_getattr(self, Foo, name)
+    __repr__ = _swig_repr
+    def __init__(self): 
+        this = _classes.@\color{red}new\_Foo@()
+        try: self.this.append(this)
+        except: self.this = this
+    __swig_destroy__ = _classes.@\color{red}delete\_Foo@
+    __del__ = lambda self : None;
+Foo_swigregister = _classes.Foo_swigregister
+Foo_swigregister(Foo)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-13]{More complicated classes}
+ That was fun.  Now for a slightly more interesting class:
+
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+class Goo {
+public:
+   Goo() : i_(0), s_("") {}
+   Goo(int i) : i_(i), s_("") {} Goo(std::string const& s) : i_(0), s_(s) {}
+   int getI() const { return i_; }
+   std::string getS() const { return s_; }
+private:
+   int i_;
+   std::string s_;
+};
+\end{lstlisting}
+
+\pause
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import classes
+>>> g = classes.Goo()
+>>> print "%d \"%s\"" % (g.getI(), g.getS())
+0 ""
+>>> g = classes.Goo(12);  print "%d \"%s\"" % (g.getI(), g.getS())
+12 ""
+>>> g = classes.Goo("rhl");  print "%d \"%s\"" % (g.getI(), g.getS())
+0 "rhl"
+\end{lstlisting}
+\pause
+
+In this case, \texttt{Goo}'s proxy class has entries:
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+    def getI(self): return _classes.@\color{red}Goo\_getI@(self)
+    def getS(self): return _classes.@\color{red}Goo\_getS@(self)
+\end{lstlisting}
+\end{frame}
+
+%\begin{frame}[fragile,label=sec-6-14]{What if I don't like accessor functions?}
+% What about \texttt{struct}-style coding?
+%
+%\lstset{language=c++,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%class Goo {
+%public:
+%    Goo() : i_(0), s_(""), x(-1) {}
+%    Goo(int i) : i_(i), s_(""), x(-1) {}
+%    Goo(std::string const& s) : i_(0), s_(s), x(-1) {}
+%...
+%    double x;
+%};
+%\end{lstlisting}
+
+%\pause
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%>>> g.x
+%-1.0
+%>>> g.x = 10
+%>>> g.x
+%10.0
+%\end{lstlisting}
+%good
+%\pause
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%>>> g.y = 1000
+%>>> g.y
+%1000
+%\end{lstlisting}
+%
+%Not so good (\texttt{y} isn't a member of \texttt{Goo}).
+%\end{frame}
+
+%\begin{frame}[fragile,label=sec-6-15]{Preventing \swig from extending classes}
+% The problem is that \texttt{Foo} is a python proxy class, and python permits
+% anyone to add members such as \texttt{y} to a class.
+%
+%Fortunately, there's a solution:
+%
+%\lstset{language=c++,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%%module goo
+%%{
+%#include <iostream>  
+%#include "Goo.h"
+%
+%%}
+%
+%@\color{red}\%pythonnondynamic;@
+%
+%%include "Goo.h"
+%\end{lstlisting}
+%\pause
+%and now:
+%\lstset{language=Python,label= ,caption= ,numbers=none}
+%\begin{lstlisting}
+%>>> g = Goo(1)
+%>>> g.y
+%Traceback (most recent call last):
+%  File "<stdin>", line 1, in <module>
+%  File "goo.py", line 356, in <lambda>
+%    __getattr__ = lambda self, name: _swig_getattr(self, Goo, name)
+%  File "goo.py", line 54, in _swig_getattr
+%    raise AttributeError(name)
+%AttributeError: y
+%\end{lstlisting}
+%
+%\pause
+
+%that's better.
+%\end{frame}
+
+\begin{frame}[label=sec-6-16]{Extending the interface in python}
+You can also add code to the python interface (it's also possible to add to the \CPP interface in
+python using \swig \emph{directors}, but I've never tried).  It's not surprising that you can extend the
+python layer when you recall the existence of proxy classes.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-17]{Extending the interface in python}
+ \lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+// -*- c++ -*-
+%module goo
+
+%{
+#include <iostream>
+#include "Goo.h"
+%}
+%pythonnondynamic;
+%include "std_iostream.i"
+
+%include "Goo.h"
+
+%extend Goo {
+   void printMe(std::ostream& os) {
+      os << $self->getI() << " \"" << $self->getS() << "\"" << std::endl;
+   }
+   %pythoncode %{
+   def __str__(self):
+      return "%d \"%s\"" % (self.getI(), self.getS())
+   %}
+}
+\end{lstlisting}
+\pause
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> goo.Goo(12).printMe(goo.cout)
+12 ""
+>>> print goo.Goo('xxx')
+0 "xxx"
+\end{lstlisting}
+\pause
+You can easily imagine what the proxy class looks like.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-18]{\swig v. the \emph{STL}}
+ One reason to use \CPP is the Standard Template Library.
+
+\lstset{language=c++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+// -*- c++ -*-
+%module vector
+%include "std_vector.i"
+
+%{
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "Goo.h"
+%}
+
+%include "Goo.h"
+
+%template(vectorGoo) std::vector<Goo>;
+\end{lstlisting}
+
+\pause
+\lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import vector
+>>> v = vector.vectorGoo()
+>>> v.push_back(vector.Goo(0))
+>>> v.append(vector.Goo(1))
+>>> len(v)
+2
+>>> v[1].getI()
+1
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-19]{Why do I care?}
+ So what? python already has vector-like lists.
+\pause
+Consider:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+// -*- c++ -*-
+%module vector2
+%include "std_vector.i"
+
+%{
+#include <iostream>
+#include <string>
+#include <vector>
+#include "Goo.h"
+%}
+
+%import "goo.i"
+
+%template(vectorGoo) std::vector<Goo>;
+
+%inline %{
+   std::vector<Goo> *makeVectorGoo() {
+      return new std::vector<Goo>;
+   }
+
+    void printGV(std::vector<Goo> const& gv) {
+        for (auto ptr = gv.begin(); ptr != gv.end(); ++ptr) {
+            std::cout << ptr->getI() << std::endl;
+        }
+    }
+%}
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-20]{Using python's \texttt{list} with \texttt{std::vector} classes}
+ \lstset{language=Python,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+>>> import vector2 as vector; import goo
+>>> v = vector.makeVectorGoo()          # equivalent to vector.VectorGoo()
+>>> v.push_back(goo.Goo(0)); v.push_back(goo.Goo(1))
+>>> vector.printGV(v)
+0
+1
+>>> vv = [goo.Goo(10), goo.Goo(20)]
+>>> vector.printGV(vv)
+10
+20
+\end{lstlisting}
+
+\pause
+
+That's pretty nice;  we passed a python list to a \CPP function expecting a \texttt{std::vector<>}.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-21]{\swig woes}
+ \vspace*{-3mm}
+If you put the \verb~%template~ line \emph{after} printGV, you'd get:
+\lstset{language=C++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+Traceback (most recent call last):
+  File "./vector2_demo.py", line 13, in <module>
+    main()
+  File "./vector2_demo.py", line 10, in main
+    vector.printGV(vv)
+TypeError: in method 'printGV', argument 1 of type 
+                     'std::vector< Goo,std::allocator< Goo > > const &'
+\end{lstlisting}
+
+\pause
+\swig needed to be told how to handle \verb~std::vector<Goo>~ before it saw the declaration
+
+\pause
+If you omit the \verb~%template~ line and try the \verb~push_back~ you get:
+\lstset{language=c++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+Traceback (most recent call last):
+  File "./vector2_demo.py", line 13, in <module>
+    main()
+  File "./vector2_demo.py", line 6, in main
+    v.push_back(goo.Goo(0))
+AttributeError: 'SwigPyObject' object has no attribute 'push_back'
+\end{lstlisting}
+\pause
+whereas \verb~v.append(goo.Goo(666))~ produces:
+\lstset{language=c++,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+Traceback (most recent call last):
+  File "./vector2_demo.py", line 15, in <module>
+    main()
+  File "./vector2_demo.py", line 7, in main
+    v.append(goo.Goo(666))
+SystemError: error return without exception set
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-22]{\swig \emph{typemaps}}
+ Much of \swig is built around \emph{typemaps}. 
+\pause
+For example, when \swig is wrapping python the following maps are active
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+/* Convert from Python --> C */
+%typemap(in) int {
+    $1 = PyInt_AsLong($input);
+}
+
+/* Convert from C --> Python */
+%typemap(out) int {
+    $result = PyInt_FromLong($1);
+}
+\end{lstlisting}
+These are essentially macros that generate \CPP in the \alert{\wrap.cc} file.
+
+\pause
+To generate perl bindings, we use a different typemap:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+/* Convert from Perl --> C */
+%typemap(in) int {
+   $1 = SvIV($input);
+}
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-23]{\swig \emph{typemaps}}
+ For example, given
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+int foo(int x, int y);
+\end{lstlisting}
+\pause
+\swig writes something like:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+PyObject *wrap_foo(PyObject *self, PyObject *args) {
+   int arg1, arg2;
+   int result;
+   PyObject *obj1, *obj2;
+   PyObject *resultobj;
+
+   if (!PyArg_ParseTuple("OO:foo", &obj1, &obj2)) return NULL;
+
+   @\color{red}arg1 = PyInt\_AsLong(obj1);@
+   @\color{red}arg2 = PyInt\_AsLong(obj2);@
+
+   result = foo(arg1);
+
+   @\color{red}resultobj = PyInt\_FromLong(result);@
+
+   return resultobj;
+}
+\end{lstlisting}
+\pause
+You can write your own typemaps if you have special needs, but generally speaking the casual \swig user
+doesn't need to learn these arcana. 
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-24]{applying typemaps}
+ I can specify that a typemap only be applied to an argument with a particular name:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+  %typemap(in) int @\color{red}positive@ {
+      $1 = PyInt_AsLong($input);
+      if ($1 <= 0) {
+         SWIG_exception(SWIG_ValueError,"Expected positive value.");
+      }
+  }
+\end{lstlisting}
+\pause
+(It would be better to use a \texttt{\%typemap(check)} typemap).
+
+\pause
+Unfortunately, my routine looks like:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+int *newArray(int n);
+\end{lstlisting}
+How do I check that \texttt{n} is positive?
+\pause
+The solution is to ask \swig to \texttt{\%apply} my \texttt{int positive} map to \texttt{n}:
+\lstset{language=C,label= ,caption= ,numbers=none}
+\begin{lstlisting}
+%apply int positive { int n };
+\end{lstlisting}
+and now \texttt{newArray}'s argument is checked.
+\end{frame}
+
+\begin{frame}[fragile,label=sec-6-30]{\BP \emph{v}. \texttt{cython} \emph{v}. \swig}
+ There appear to be three viable technologies to wrap \CPP and python: \BP, \texttt{cython}, and \swig.
+  Which should you use?
+\pause
+\begin{block}{In simple case \swig is less work; you tell it about your \alert{.h} file and it generates the full interface. \pause In many complicated cases this is still true, but when it fails, it can be very confusing.}
+\pause
+\end{block}
+\begin{block}{With \texttt{cython} you have to say what you want to wrap, and \texttt{cython} generates the interface \pause}
+\end{block}
+\begin{block}{You have to tell \BP exactly what you want to expose, and how to do so --- but \BP then does exactly what you told it to do}
+\pause
+\end{block}
+\begin{block}{Ultimately the decision is a matter of taste. \pause I prefer \texttt{cython}.}
+\end{block}
+\end{frame}
+% Emacs 24.5.1 (Org mode 8.2.7c)
+
+\section*{CPython}
+\label{sec-7}
+\begin{frame}[label=sec-7-1]{Using the C API, \emph{CPython}}
+\begin{block}{Python's C API}
+\url{http://docs.python.org/extending/index.html\#extending-index}
+\url{http://docs.python.org/c-api}
+\end{block}
+\end{frame}
+
+\end{document}
